@@ -7,6 +7,7 @@ import qualified Control.Exception as Exc
 import Control.Monad ((<=<), void)
 import qualified Data.ByteString.Char8 as ByteChar
 import Data.Coerce (coerce)
+import Data.Foldable (fold)
 import Data.Void (Void)
 import Data.Semigroup ((<>))
 import Lib
@@ -60,12 +61,35 @@ optParserInfo = Opt.info (argsParser <**> Opt.helper) Opt.fullDesc
 -- []. send messages from self to peers
 runProgramWithArgs :: Args -> IO ()
 runProgramWithArgs (Args ownAddress peerAddresses) = Net.withSocketsDo $ do
-  ownAddressInfo <- resolve ownAddress
-  -- close the socket if an exception is raised during computation of `loop`
-  Exc.bracket (open ownAddressInfo) Net.close (mainLoop ownAddress)
+  let sockets = openSockets (ownAddress, peerAddresses)
+  -- Close the sockets if an exception is raised during the main loop.
+  Exc.bracket sockets closeSockets mainLoop
   where
-    resolve :: Address -> IO Net.AddrInfo
-    resolve (Address host port) = do
+    openSockets :: (Address, [Address]) -> IO (Net.Socket, [Net.Socket])
+    openSockets (ownAddress, peerAddresses) = do
+      ownSocket <- startListening ownAddress
+      peerSockets <- connectToPeers peerAddresses
+      return (ownSocket, peerSockets)
+
+    closeSockets :: (Net.Socket, [Net.Socket]) -> IO ()
+    closeSockets (ownSocket, peerSockets) = do
+      Net.close ownSocket 
+      fold $ fmap Net.close peerSockets      
+
+    mainLoop :: (Net.Socket, [Net.Socket]) -> IO ()
+    mainLoop (ownSocket, peerSockets) = do
+      listenToPeers ownSocket
+      talkToPeers peerSockets
+      mainLoop (ownSocket, peerSockets)
+
+    startListening :: Address -> IO Net.Socket
+    startListening = openSocket <=< resolveAddress
+
+    connectToPeers :: [Address] -> IO [Net.Socket]
+    connectToPeers = traverse (connectToPeer <=< resolveAddress)
+
+    resolveAddress :: Address -> IO Net.AddrInfo
+    resolveAddress (Address host port) = do
       let hints = Net.defaultHints { Net.addrFlags = [Net.AI_PASSIVE]
                                    , Net.addrSocketType = Net.Stream
                                    }
@@ -75,8 +99,8 @@ runProgramWithArgs (Args ownAddress peerAddresses) = Net.withSocketsDo $ do
                             (Just $ coerce port)
       return addressInfo
 
-    open :: Net.AddrInfo -> IO Net.Socket
-    open addressInfo = do
+    openSocket :: Net.AddrInfo -> IO Net.Socket
+    openSocket addressInfo = do
       -- create a socket
       socket <- Net.socket
                   (Net.addrFamily addressInfo)
@@ -87,6 +111,7 @@ runProgramWithArgs (Args ownAddress peerAddresses) = Net.withSocketsDo $ do
       -- start listening for connection request
       -- set the max queue size for connection requests to 5
       Net.listen socket 5
+      putStrLn $ "Now listening on " ++ (show ownAddress)
       return socket
 
     connectToPeer :: Net.AddrInfo -> IO Net.Socket
@@ -95,11 +120,14 @@ runProgramWithArgs (Args ownAddress peerAddresses) = Net.withSocketsDo $ do
                   (Net.addrFamily addressInfo)
                   (Net.addrSocketType addressInfo)
                   (Net.addrProtocol addressInfo)
-      forkIO (Net.connect socket $ Net.addrAddress addressInfo)
+      Net.connect socket $ Net.addrAddress addressInfo
       return socket
 
-    connectPeers :: [Address] -> IO [Net.Socket]
-    connectPeers = traverse (connectToPeer <=< resolve)
+    listenToPeers :: Net.Socket -> IO ()
+    listenToPeers ownSocket = do
+      (peerSocket, peerAddress) <- Net.accept ownSocket
+      forkIO $ listenToPeer (peerSocket, peerAddress)
+      putStrLn $ "Now receiving messages from " ++ show peerAddress
 
     listenToPeer :: (Net.Socket, Net.SockAddr) -> IO ()
     listenToPeer (peerSocket, peerAddress) = do
@@ -107,19 +135,9 @@ runProgramWithArgs (Args ownAddress peerAddresses) = Net.withSocketsDo $ do
       putStrLn $ "New message from " ++ (show peerAddress) ++ ": " ++ (ByteChar.unpack message)
       listenToPeer (peerSocket, peerAddress)
 
-    acceptConnections :: Net.Socket -> IO ()
-    acceptConnections ownSocket = do
-      (peerSocket, peerAddress) <- Net.accept ownSocket
-      forkIO $ listenToPeer (peerSocket, peerAddress)
-      putStrLn $ "Now receiving messages from " ++ show peerAddress
-
-    mainLoop :: Address -> Net.Socket -> IO ()
-    mainLoop ownAddress ownSocket = do
-      putStrLn $ "Now listening on " ++ (show ownAddress)
-      let go socket = do
-            acceptConnections socket
-            go socket
-      go ownSocket
+    talkToPeers :: [Net.Socket] -> IO ()
+    talkToPeers peerSockets = do
+      return ()
 
 main :: IO ()
 main = runProgramWithArgs =<< Opt.execParser optParserInfo
