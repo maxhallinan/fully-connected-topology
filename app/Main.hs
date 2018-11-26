@@ -2,9 +2,9 @@
 module Main where
 
 import Control.Applicative ((<|>), some)
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkFinally, forkIO, threadDelay)
 import qualified Control.Exception as Exc
-import Control.Monad ((<=<), void)
+import Control.Monad ((<=<), forever, void)
 import qualified Data.ByteString.Char8 as ByteChar
 import Data.Coerce (coerce)
 import Data.Foldable (fold)
@@ -17,6 +17,7 @@ import Options.Applicative ((<**>))
 import qualified Options.Applicative as Opt
 import qualified Network.Socket as Net
 import qualified Network.Socket.ByteString as NetByte
+import qualified Control.Concurrent.Async as Async
 
 newtype Host = Host String deriving (Eq, Show)
 newtype Port = Port String deriving (Eq, Show)
@@ -61,32 +62,46 @@ optParserInfo = Opt.info (argsParser <**> Opt.helper) Opt.fullDesc
 -- []. send messages from self to peers
 runProgramWithArgs :: Args -> IO ()
 runProgramWithArgs (Args ownAddress peerAddresses) = Net.withSocketsDo $ do
-  let sockets = openSockets (ownAddress, peerAddresses)
+  let socket = startServer ownAddress
   -- Close the sockets if an exception is raised during the main loop.
-  Exc.bracket sockets closeSockets mainLoop
+  Exc.bracket (startServer ownAddress) stopServer (mainLoop peerAddresses)
   where
-    openSockets :: (Address, [Address]) -> IO (Net.Socket, [Net.Socket])
-    openSockets (ownAddress, peerAddresses) = do
-      ownSocket <- startListening ownAddress
-      peerSockets <- connectToPeers peerAddresses
-      return (ownSocket, peerSockets)
+    startServer :: Address -> IO Net.Socket
+    startServer = openSocket <=< resolveAddress
 
-    closeSockets :: (Net.Socket, [Net.Socket]) -> IO ()
-    closeSockets (ownSocket, peerSockets) = do
-      Net.close ownSocket 
-      fold $ fmap Net.close peerSockets      
+    stopServer :: Net.Socket -> IO ()
+    stopServer = Net.close
 
-    mainLoop :: (Net.Socket, [Net.Socket]) -> IO ()
-    mainLoop (ownSocket, peerSockets) = do
-      listenToPeers ownSocket
-      talkToPeers peerSockets
-      mainLoop (ownSocket, peerSockets)
+    mainLoop :: [Address] -> Net.Socket -> IO ()
+    mainLoop peerAddresses ownSocket = do
+      -- fork managed threads
+      async1 <- Async.async $ listenToPeers ownSocket
+      async2 <- Async.async $ talkToPeers peerAddresses
+      -- wait for these threads to complete before continuing
+      void $ Async.wait async1
+      void $ Async.wait async2
+ 
+    listenToPeers :: Net.Socket -> IO ()
+    listenToPeers ownSocket = forever $ do
+      (peerSocket, peerAddress) <- Net.accept ownSocket
+      forkFinally (listenToPeer (peerSocket, peerAddress)) (\_ -> Net.close peerSocket)
+      putStrLn $ "Now receiving messages from " ++ show peerAddress
 
-    startListening :: Address -> IO Net.Socket
-    startListening = openSocket <=< resolveAddress
+    listenToPeer :: (Net.Socket, Net.SockAddr) -> IO ()
+    listenToPeer (peerSocket, peerAddress) = do
+      message <- NetByte.recv peerSocket 1024
+      putStrLn $ "New message from " ++ (show peerAddress) ++ ": " ++ (ByteChar.unpack message)
 
-    connectToPeers :: [Address] -> IO [Net.Socket]
-    connectToPeers = traverse (connectToPeer <=< resolveAddress)
+    talkToPeers :: [Address] -> IO ()
+    talkToPeers peerAddress = do
+      connectToPeers peerAddress
+
+    connectToPeers :: [Address] -> IO ()
+    connectToPeers peerAddresses = do
+      putStrLn "connecting to peers"
+      connections <- connect peerAddresses
+      return $ fold connections
+      where connect = traverse (connectToPeer <=< resolveAddress)
 
     resolveAddress :: Address -> IO Net.AddrInfo
     resolveAddress (Address host port) = do
@@ -114,30 +129,36 @@ runProgramWithArgs (Args ownAddress peerAddresses) = Net.withSocketsDo $ do
       putStrLn $ "Now listening on " ++ (show ownAddress)
       return socket
 
-    connectToPeer :: Net.AddrInfo -> IO Net.Socket
+    connectToPeer :: Net.AddrInfo -> IO ()
     connectToPeer addressInfo = do
-      socket <- Net.socket
+      putStrLn $ "connecting to peer: " ++ (show $ Net.addrAddress addressInfo)
+      peerSocket <- Net.socket
                   (Net.addrFamily addressInfo)
                   (Net.addrSocketType addressInfo)
                   (Net.addrProtocol addressInfo)
-      Net.connect socket $ Net.addrAddress addressInfo
-      return socket
+      void $ forkFinally (connect peerSocket) (r peerSocket)
+      where 
+          r peerSocket e = do
+            putStrLn $ show e
+            retryConnect peerSocket
 
-    listenToPeers :: Net.Socket -> IO ()
-    listenToPeers ownSocket = do
-      (peerSocket, peerAddress) <- Net.accept ownSocket
-      forkIO $ listenToPeer (peerSocket, peerAddress)
-      putStrLn $ "Now receiving messages from " ++ show peerAddress
+          --- what's happening at the moment is that I connect to the socket,
+          --  send it the hello world message, and then the function finishes.
+          --  so the thread finishes and the `r` function is called by forkFinally.
+          --  This restarts the peer connection process.
+          --  What I want is for the thread to sleep while it waits for a message
+          --  to send.
+          --  Could do this with an MVar.
+          connect socket = do 
+            Net.connect socket $ Net.addrAddress addressInfo
+            NetByte.send socket "Hello, World!"
+            putStrLn $ "connected to " ++ (show $ Net.addrAddress addressInfo)
 
-    listenToPeer :: (Net.Socket, Net.SockAddr) -> IO ()
-    listenToPeer (peerSocket, peerAddress) = do
-      message <- NetByte.recv peerSocket 1024
-      putStrLn $ "New message from " ++ (show peerAddress) ++ ": " ++ (ByteChar.unpack message)
-      listenToPeer (peerSocket, peerAddress)
-
-    talkToPeers :: [Net.Socket] -> IO ()
-    talkToPeers peerSockets = do
-      return ()
+          retryConnect socket = do
+            Net.close socket
+            putStrLn $ "retrying connection to: " ++ (show $ Net.addrAddress addressInfo)
+            threadDelay 1500000
+            connectToPeer addressInfo
 
 main :: IO ()
 main = runProgramWithArgs =<< Opt.execParser optParserInfo
