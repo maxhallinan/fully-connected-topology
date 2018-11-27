@@ -14,6 +14,7 @@ runProgramWithArgs args = do
   let ownAddress    = Args.ownAddress args
       peerAddresses = Args.peerAddresses args
   listenThread <- Async.async $ FullyConnected.listenToPeers handleMessage ownAddress 
+  -- placeholder message to be replaced with input from stdin
   talkThread   <- Async.async $ FullyConnected.talkToPeers peerAddresses "Hello, World!"
   void $ Async.wait listenThread
   void $ Async.wait talkThread

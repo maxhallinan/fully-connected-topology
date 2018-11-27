@@ -22,6 +22,7 @@ import Data.Void (Void)
 import Data.Coerce (coerce)
 import qualified Network.Socket as Net
 import qualified Network.Socket.ByteString as NetByte
+import qualified System.IO as IO
 import qualified Text.Megaparsec as Mega
 import qualified Text.Megaparsec.Char as Mega
 
@@ -69,15 +70,22 @@ talkToPeers peerAddresses message = fold <$> traverse talk peerAddresses
   where talk = flip talkToPeer message
 
 talkToPeer :: Address -> String -> IO ()
-talkToPeer address message = undefined
-  -- 1. fork thread
-  -- 2. resolve address
-  -- 3. create a socket
-  -- 4. connect socket to address
-  -- 5. send message through the socket
-  -- 6. close socket
-  -- ?. What do I do if the connection fails?
-  -- ?. Where do I handle the error?
+talkToPeer peerAddress message = do
+  addrInfo <- resolveAddress peerAddress
+  Exception.bracket (createSocket addrInfo) closeSocket (sendMessage addrInfo message)
+
+-- TODO: concurrent message sending
+sendMessage :: Net.AddrInfo -> String -> Net.Socket -> IO ()
+sendMessage addrInfo message peerSocket = do
+  Net.connect peerSocket $ Net.addrAddress addrInfo
+  void $ NetByte.send peerSocket (ByteChar.pack message)
+
+createSocket :: Net.AddrInfo -> IO Net.Socket
+createSocket addrInfo =
+  Net.socket
+    (Net.addrFamily addrInfo)
+    (Net.addrSocketType addrInfo)
+    (Net.addrProtocol addrInfo)
 
 startServer :: Address -> IO Net.Socket
 startServer = listenAtAddress <=< resolveAddress
@@ -112,12 +120,12 @@ handleConnections ::  MessageHandler -> Net.Socket -> IO ()
 handleConnections handleMessage ownSocket = forever $ do
   (peerSocket, peerAddress) <- Net.accept ownSocket
   forkFinally
-    (receiveMessages handleMessage (peerSocket, peerAddress))
+    (receiveMessage handleMessage (peerSocket, peerAddress))
     (\_ -> Net.close peerSocket)
   putStrLn $ "Now receiving messages from " ++ show peerAddress
 
-receiveMessages :: MessageHandler -> (Net.Socket, Net.SockAddr) -> IO ()
-receiveMessages handleMessage (peerSocket, peerAddress) = forever $ do
+receiveMessage :: MessageHandler -> (Net.Socket, Net.SockAddr) -> IO ()
+receiveMessage handleMessage (peerSocket, peerAddress) = do
   message <- NetByte.recv peerSocket 1024
   handleMessage $ ByteChar.unpack message
 
@@ -130,33 +138,6 @@ connectToPeer addressInfo = do
                   (Net.addrProtocol addressInfo)
   Net.connect peerSocket $ Net.addrAddress addressInfo
   return peerSocket
-  -- void $ forkFinally (connect peerSocket) (r peerSocket)
-  -- where
-  --     r peerSocket e = do
-  --       putStrLn $ show e
-  --       retryConnect peerSocket
-
-  --     --- what's happening at the moment is that I connect to the socket,
-  --     --  send it the hello world message, and then the function finishes.
-  --     --  so the thread finishes and the `r` function is called by forkFinally.
-  --     --  This restarts the peer connection process.
-  --     --  What I want is for the thread to sleep while it waits for a message
-  --     --  to send.
-  --     --  Could do this with an MVar.
-  --     connect socket = do
-  --       Net.connect socket $ Net.addrAddress addressInfo
-  --       NetByte.send socket "Hello, World!"
-  --       putStrLn $ "Connected to " ++ (showAddrInfo addressInfo)
-
-  --     retryConnect socket = do
-  --       Net.close socket
-  --       putStrLn $ "Retrying connection to: " ++ (showAddrInfo addressInfo)
-  --       threadDelay 1500000
-  --       connectToPeer addressInfo
-
-sendMessage :: Net.Socket -> String -> IO ()
-sendMessage socket message = do
-  void $ NetByte.send socket (ByteChar.pack message)
 
 showAddrInfo :: Net.AddrInfo -> String
 showAddrInfo = show . Net.addrAddress
