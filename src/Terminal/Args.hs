@@ -22,8 +22,6 @@ data Args = Args { ownAddress :: FullyConnected.Address
 parseArgs :: IO Args
 parseArgs = Opt.execParser argsParserWithInfo
 
--- Helper functions
-
 type Parsec = Mega.Parsec Void String
 
 argsParserWithInfo :: Opt.ParserInfo Args

@@ -11,10 +11,10 @@ main = runProgramWithArgs =<< Args.parseArgs
 
 runProgramWithArgs :: Args.Args -> IO ()
 runProgramWithArgs args = do
-  let ownAddress = Args.ownAddress args
+  let ownAddress    = Args.ownAddress args
       peerAddresses = Args.peerAddresses args
   listenThread <- Async.async $ FullyConnected.listenToPeers handleMessage ownAddress 
-  talkThread <- Async.async $ FullyConnected.talkToPeers peerAddresses "Hello, World!"
+  talkThread   <- Async.async $ FullyConnected.talkToPeers peerAddresses "Hello, World!"
   void $ Async.wait listenThread
   void $ Async.wait talkThread
 
