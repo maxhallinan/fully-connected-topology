@@ -1,7 +1,9 @@
 # fully-connected-topology
 
+## Example
+
 ```
-Usage: fully-connected-topology 127.0.0.1:3000 '127.0.0.1:3001,127.0.0.1:3002'
+fully-connected-topology 127.0.0.1:3000 '127.0.0.1:3001,127.0.0.1:3002'
 ```
 
 ## Usage
