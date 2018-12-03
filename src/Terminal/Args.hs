@@ -33,12 +33,12 @@ argsParser = Args <$> ownAddressParser <*> peerAddressesParser
 ownAddressParser = Opt.argument argReader helpText
   where
     argReader = Opt.maybeReader (Mega.parseMaybe FullyConnected.addressParser)
-    helpText  = Opt.metavar "OWN_ADDRESS" <> Opt.help "client's address"
+    helpText  = Opt.metavar "OWN_ADDRESS" <> Opt.help "the local address of the client"
 
 peerAddressesParser = Opt.argument argReader helpText
   where
     argReader = Opt.maybeReader (Mega.parseMaybe peersParser)
-    helpText  = Opt.metavar "PEER_ADDRESSES" <> Opt.help "peer addresses"
+    helpText  = Opt.metavar "PEER_ADDRESSES" <> Opt.help "a comma-separated list of peer addresses"
 
 peersParser :: Parsec [FullyConnected.Address]
 peersParser = FullyConnected.addressParser `Mega.sepBy` Mega.char ','
