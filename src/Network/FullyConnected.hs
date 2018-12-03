@@ -21,9 +21,10 @@ import qualified Control.Exception as Exception
 import qualified Control.Exception.Base as Exception
 import Control.Monad ((<=<), forever, join, void)
 import qualified Data.ByteString.Char8 as ByteChar
-import Data.Foldable (fold)
-import Data.Void (Void)
 import Data.Coerce (coerce)
+import Data.Foldable (fold)
+import Data.List (drop)
+import Data.Void (Void)
 import qualified Network.Socket as Net
 import qualified Network.Socket.ByteString as NetByte
 import qualified System.IO as IO
@@ -73,9 +74,9 @@ type MessageHandler = String -> IO ()
 
 listen :: MessageHandler -> Address -> IO ()
 listen handleMessage ownAddress = Net.withSocketsDo $ do
-  Exception.bracket 
-    (startServer ownAddress) 
-    closeSocket 
+  Exception.bracket
+    (startServer ownAddress)
+    closeSocket
     (handleConnections handleMessage)
 
 broadcast :: Connections -> String -> IO ()
@@ -86,7 +87,7 @@ broadcast connections message = do
     send :: String -> Net.Socket -> IO ()
     send message socket = void $ forkIO $ do
       sendMessage message socket
-      
+
     -- TODO: remove closed sockets
     removeClosed :: [Net.Socket] -> IO ([Net.Socket], [Net.Socket])
     removeClosed sockets = return (sockets, sockets)
@@ -96,8 +97,15 @@ sendMessage message peerSocket = do
   Exception.catch send handleError
   where
     send :: IO ()
-    send = void $ NetByte.send peerSocket (ByteChar.pack message)
-    
+    send = do
+      let m           = ByteChar.pack message
+          totalBytes  = ByteChar.length m
+      bytesSent <- NetByte.send peerSocket m
+      -- NetByte.send is not guaranteed to send all bytes
+      if bytesSent < totalBytes
+        then sendMessage (drop bytesSent message) peerSocket
+        else return ()
+
     handleError :: IO.Error.IOError -> IO ()
     handleError error = do
       -- TODO: detect that the socket is closed and remove sockets
@@ -162,11 +170,11 @@ connect addresses = do
   connections <- initConnections
   fold <$> traverse (connect connections) addresses
   return connections
-  where 
+  where
     connect connections address = void $ forkIO $ do
       addrInfo <- resolveAddress address
       Exception.catch (connection addrInfo) (retryConnect addrInfo)
-      where 
+      where
         connection :: Net.AddrInfo -> IO ()
         connection addrInfo = connectToPeer handleConnection addrInfo
 
@@ -178,7 +186,7 @@ connect addresses = do
         updateConnections c cs = return (c : cs, ())
 
         retryConnect :: Net.AddrInfo -> IO.Error.IOError -> IO ()
-        retryConnect addrInfo _ = do 
+        retryConnect addrInfo _ = do
           putStrLn $ "Retrying connection to peer: " ++ (showAddrInfo addrInfo)
           void $ Concurrent.threadDelay 1000000
           void $ connect connections address
@@ -186,7 +194,7 @@ connect addresses = do
 connectToPeer :: (Net.Socket -> IO ()) -> Net.AddrInfo -> IO ()
 connectToPeer handleConnection addrInfo = do
   Exception.bracketOnError socket close connect
-  where 
+  where
         peerIp = showAddrInfo addrInfo
 
         socket :: IO Net.Socket
