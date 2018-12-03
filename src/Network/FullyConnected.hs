@@ -7,12 +7,11 @@ module Network.FullyConnected
   , Port
   , address
   , addressParser
-  , connectToPeers
+  , broadcast
+  , connect
   , host
-  , initConnections
-  , listenToPeers
+  , listen
   , port
-  , talkToPeers
   ) where
 
 import Control.Applicative ((<|>), some)
@@ -72,25 +71,37 @@ initConnections = Concurrent.newMVar []
 
 type MessageHandler = String -> IO ()
 
-listenToPeers :: MessageHandler -> Address -> IO ()
-listenToPeers handleMessage ownAddress = Net.withSocketsDo $ do
-  Exception.bracket (startServer ownAddress) closeSocket (handleConnections handleMessage)
+listen :: MessageHandler -> Address -> IO ()
+listen handleMessage ownAddress = Net.withSocketsDo $ do
+  Exception.bracket 
+    (startServer ownAddress) 
+    closeSocket 
+    (handleConnections handleMessage)
 
-talkToPeers :: Connections -> String -> IO ()
-talkToPeers connections message = undefined
-  -- fold <$> traverse talk peerAddresses
-  -- where talk = flip talkToPeer message
+broadcast :: Connections -> String -> IO ()
+broadcast connections message = do
+  sockets <- Concurrent.modifyMVar connections removeClosed
+  fold <$> traverse (sendMessage message) sockets
+  where
+    send :: String -> Net.Socket -> IO ()
+    send message socket = void $ forkIO $ do
+      sendMessage message socket
+      
+    -- TODO: remove closed sockets
+    removeClosed :: [Net.Socket] -> IO ([Net.Socket], [Net.Socket])
+    removeClosed sockets = return (sockets, sockets)
 
-talkToPeer :: Address -> String -> IO ()
-talkToPeer peerAddress message = do
-  addrInfo <- resolveAddress peerAddress
-  Exception.bracket (createSocket addrInfo) closeSocket (sendMessage addrInfo message)
-
--- TODO: concurrent message sending
-sendMessage :: Net.AddrInfo -> String -> Net.Socket -> IO ()
-sendMessage addrInfo message peerSocket = do
-  Net.connect peerSocket $ Net.addrAddress addrInfo
-  void $ NetByte.send peerSocket (ByteChar.pack message)
+sendMessage :: String -> Net.Socket -> IO ()
+sendMessage message peerSocket = do
+  Exception.catch send handleError
+  where
+    send :: IO ()
+    send = void $ NetByte.send peerSocket (ByteChar.pack message)
+    
+    handleError :: IO.Error.IOError -> IO ()
+    handleError error = do
+      -- TODO: detect that the socket is closed and remove sockets
+      putStrLn $ "Error sending the message: " ++ (show error)
 
 createSocket :: Net.AddrInfo -> IO Net.Socket
 createSocket addrInfo =
@@ -146,12 +157,11 @@ receiveMessage handleMessage (peerSocket, peerAddress) = do
       handleMessage $ ByteChar.unpack message
       receiveMessage handleMessage (peerSocket, peerAddress)
 
-connectToPeers :: [Address] -> IO Connections
-connectToPeers addresses = do
+connect :: [Address] -> IO Connections
+connect addresses = do
   connections <- initConnections
   fold <$> traverse (connect connections) addresses
   return connections
-
   where 
     connect connections address = void $ forkIO $ do
       addrInfo <- resolveAddress address
@@ -175,7 +185,7 @@ connectToPeers addresses = do
 
 connectToPeer :: (Net.Socket -> IO ()) -> Net.AddrInfo -> IO ()
 connectToPeer handleConnection addrInfo = do
-  Exception.bracket socket close connect
+  Exception.bracketOnError socket close connect
   where 
         peerIp = showAddrInfo addrInfo
 
