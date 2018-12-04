@@ -16,7 +16,7 @@ fully-connected-topology 127.0.0.1:3000 127.0.0.1:3001 127.0.0.1:3002
 Usage: fully-connected-topology <own-address> <peer-address>...
 
 Available options:
-  <own-address>            the local address of the client
-  <peer-address>...        one or more peer addresses
+  <own-address>            The local address of the client
+  <peer-address>...        One or more peer addresses
   -h,--help                Show this help text
 ```

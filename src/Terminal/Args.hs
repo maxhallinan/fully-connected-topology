@@ -33,9 +33,9 @@ argsParser = Args <$> ownAddressParser <*> peerAddressesParser
 ownAddressParser = Opt.argument argReader helpText
   where
     argReader = Opt.maybeReader FullyConnected.parseAddress
-    helpText  = Opt.metavar "<own-address>" <> Opt.help "the local address of the client"
+    helpText  = Opt.metavar "<own-address>" <> Opt.help "The local address of the client"
 
 peerAddressesParser = some $ Opt.argument argReader helpText
   where
     argReader = Opt.maybeReader FullyConnected.parseAddress
-    helpText  = Opt.metavar "<peer-address>..." <> Opt.help "one or more peer addresses"
+    helpText  = Opt.metavar "<peer-address>..." <> Opt.help "One or more peer addresses"
