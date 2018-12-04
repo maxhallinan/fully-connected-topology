@@ -7,16 +7,16 @@ Messages from the network are printed to stdout.
 ## Example
 
 ```
-fully-connected-topology 127.0.0.1:3000 '127.0.0.1:3001,127.0.0.1:3002'
+fully-connected-topology 127.0.0.1:3000 127.0.0.1:3001 127.0.0.1:3002
 ```
 
 ## Usage
 
 ```
-Usage: fully-connected-topology OWN_ADDRESS PEER_ADDRESSES
+Usage: fully-connected-topology <own-address> <peer-address>...
 
 Available options:
-  OWN_ADDRESS              the local address of the client
-  PEER_ADDRESSES           a comma-separated list of peer addresses
+  <own-address>            the local address of the client
+  <peer-address>...        one or more peer addresses
   -h,--help                Show this help text
 ```

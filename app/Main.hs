@@ -12,13 +12,11 @@ main = Args.parseArgs >>= runProgramWithArgs
 
 runProgramWithArgs :: Args.Args -> IO ()
 runProgramWithArgs args = do
-  let ownAddress      = Args.ownAddress args
-      peerAddresses   = Args.peerAddresses args
-  connections         <- FullyConnected.connect peerAddresses
-  outputThread        <- Async.async $ FullyConnected.listen
-                          Terminal.IO.outputMessage
-                          ownAddress
-  let broadcast       = FullyConnected.broadcast connections
-  inputThread         <- Async.async $ Terminal.IO.inputMessage broadcast
+  let ownAddress = Args.ownAddress args
+      peerAddresses = Args.peerAddresses args
+  connections <- FullyConnected.connect peerAddresses
+  outputThread <- Async.async $ FullyConnected.listen Terminal.IO.outputMessage ownAddress
+  let broadcast = FullyConnected.broadcast connections
+  inputThread <- Async.async $ Terminal.IO.inputMessage broadcast
   void $ Async.wait inputThread
   void $ Async.wait outputThread
