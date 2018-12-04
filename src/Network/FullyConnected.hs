@@ -225,10 +225,10 @@ connectToPeer handleConnection addrInfo = do
 
         connect :: Net.Socket -> IO ()
         connect peerSocket = do
-          putStrLn $ "Connecting to peer: " ++ (showAddrInfo addrInfo)
+          putStrLn $ "Connecting to peer: " ++ peerIp
           Net.connect peerSocket $ Net.addrAddress addrInfo
           handleConnection peerSocket
-          putStrLn $ "Connected to peer: " ++ (showAddrInfo addrInfo)
+          putStrLn $ "Connected to peer: " ++ peerIp
 
         close :: Net.Socket -> IO ()
         close peerSocket = closeSocket peerSocket
