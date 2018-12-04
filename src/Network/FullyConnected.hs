@@ -9,7 +9,6 @@ module Network.FullyConnected
   , connect
   , listen
   , parseAddress
-  , parseAddressList
   ) where
 
 import Control.Applicative ((<|>), some)
@@ -35,42 +34,27 @@ data Address = Address Host Port deriving (Eq)
 instance Show Address where
   show (Address host port) = show host ++ ":" ++ show port
 
-address :: Host -> Port -> Address
-address = Address
-
 newtype Host = Host String deriving (Eq)
 
 instance Show Host where
   show = coerce
-
-host :: String -> Host
-host = Host
 
 newtype Port = Port String deriving (Eq)
 
 instance Show Port where
   show = coerce
 
-port :: String -> Port
-port = Port
-
 type Parsec = Mega.Parsec Void String
 
 parseAddress :: String -> Maybe Address
 parseAddress = Mega.parseMaybe addressParser
-
-parseAddressList :: String -> Maybe [Address]
-parseAddressList = Mega.parseMaybe addressListParser
 
 addressParser :: Parsec Address
 addressParser = do
   hostString <- some (Mega.alphaNumChar <|> Mega.char '.')
   Mega.char ':'
   portString <- some Mega.digitChar
-  return $ address (host hostString) (port portString)
-
-addressListParser :: Parsec [Address]
-addressListParser = addressParser `Mega.sepBy` Mega.char ','
+  return $ Address (Host hostString) (Port portString)
 
 type Connections = Concurrent.MVar [Net.Socket]
 
@@ -203,13 +187,16 @@ connect addresses = do
           message <- NetByte.recv peerSocket 1024
           if ByteChar.length message == 0
             then do
-              closeSocket peerSocket
-              Concurrent.modifyMVar
-                connections
-                (\cs -> return (filter (/= peerSocket) cs, ()))
+              removePeer connections peerSocket
               putStrLn "Closed connection"
             else do
               cleanup connections peerSocket
+
+removePeer :: Connections -> Net.Socket -> IO ()
+removePeer connections peerSocket = do
+  closeSocket peerSocket
+  Concurrent.modifyMVar connections remove
+  where remove cs = return (filter (/= peerSocket) cs, ())
 
 connectToPeer :: (Net.Socket -> IO ()) -> Net.AddrInfo -> IO ()
 connectToPeer handleConnection addrInfo = do
