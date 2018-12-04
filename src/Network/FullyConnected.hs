@@ -5,13 +5,11 @@ module Network.FullyConnected
   , Connections
   , Host
   , Port
-  , address
-  , addressParser
   , broadcast
   , connect
-  , host
   , listen
-  , port
+  , parseAddress
+  , parseAddressList
   ) where
 
 import Control.Applicative ((<|>), some)
@@ -58,12 +56,21 @@ port = Port
 
 type Parsec = Mega.Parsec Void String
 
+parseAddress :: String -> Maybe Address
+parseAddress = Mega.parseMaybe addressParser
+
+parseAddressList :: String -> Maybe [Address]
+parseAddressList = Mega.parseMaybe addressListParser
+
 addressParser :: Parsec Address
 addressParser = do
   hostString <- some (Mega.alphaNumChar <|> Mega.char '.')
   Mega.char ':'
   portString <- some Mega.digitChar
   return $ address (host hostString) (port portString)
+
+addressListParser :: Parsec [Address]
+addressListParser = addressParser `Mega.sepBy` Mega.char ','
 
 type Connections = Concurrent.MVar [Net.Socket]
 
