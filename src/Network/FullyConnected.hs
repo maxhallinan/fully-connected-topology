@@ -5,10 +5,12 @@ module Network.FullyConnected
   , Connections
   , Host
   , Port
+  , addPeer
   , broadcast
   , connect
   , listen
   , parseAddress
+  , removePeer
   ) where
 
 import Control.Applicative ((<|>), some)
@@ -20,7 +22,7 @@ import Control.Monad ((<=<), forever, join, void)
 import qualified Data.ByteString.Char8 as ByteChar
 import Data.Coerce (coerce)
 import Data.Foldable (fold)
-import Data.List (drop)
+import Data.List (drop, find)
 import Data.Void (Void)
 import qualified Network.Socket as Net
 import qualified Network.Socket.ByteString as NetByte
@@ -29,7 +31,9 @@ import qualified System.IO.Error as IO.Error
 import qualified Text.Megaparsec as Mega
 import qualified Text.Megaparsec.Char as Mega
 
-type Connections = Concurrent.MVar [Net.Socket]
+type Connections = Concurrent.MVar [Connection]
+
+type Connection = (Address, Net.Socket)
 
 initConnections :: IO Connections
 initConnections = Concurrent.newMVar []
@@ -63,12 +67,12 @@ addressParser = do
 
 broadcast :: Connections -> String -> IO ()
 broadcast connections message = do
-  sockets <- Concurrent.readMVar connections
-  fold <$> traverse (sendMessage message) sockets
+  cs <- Concurrent.readMVar connections
+  fold <$> traverse (send message) cs
   where
-    send :: String -> Net.Socket -> IO ()
-    send message socket = void $ forkIO $ do
-      sendMessage message socket
+    send :: String -> Connection -> IO ()
+    send message connection = void $ forkIO $ do
+      sendMessage message connection
 
 connect :: [Address] -> IO Connections
 connect addresses = do
@@ -85,8 +89,8 @@ listen handleMessage ownAddress = Net.withSocketsDo $ do
     closeSocket
     (handleConnections handleMessage)
 
-sendMessage :: String -> Net.Socket -> IO ()
-sendMessage message peerSocket = do
+sendMessage :: String -> Connection -> IO ()
+sendMessage message (address, peerSocket) = do
   Exception.catch send handleError
   where
     send :: IO ()
@@ -96,7 +100,7 @@ sendMessage message peerSocket = do
       bytesSent <- NetByte.send peerSocket m
       -- NetByte.send is not guaranteed to send all bytes
       if bytesSent < totalBytes
-        then sendMessage (drop bytesSent message) peerSocket
+        then sendMessage (drop bytesSent message) (address, peerSocket)
         else return ()
 
     handleError :: IO.Error.IOError -> IO ()
@@ -173,13 +177,13 @@ addPeer connections address = void $ forkIO $ do
     connect (addrInfo, peerSocket) = do
       putStrLn $ "Connecting to peer: " ++ (showAddrInfo addrInfo)
       Net.connect peerSocket $ Net.addrAddress addrInfo
-      Concurrent.modifyMVar connections (add peerSocket)
+      Concurrent.modifyMVar connections (add (address, peerSocket))
       forkIO $ listenForRemoteClose connections addrInfo peerSocket
       putStrLn $ "Connected to peer: " ++ (showAddrInfo addrInfo)
       return peerSocket
 
-    add :: Net.Socket -> [Net.Socket] -> IO ([Net.Socket], ())
-    add peerSocket connections = return (peerSocket : connections, ())
+    add :: Connection -> [Connection] -> IO ([Connection], ())
+    add c cs = return (c : cs, ())
 
     retryConnect :: (Net.AddrInfo, Net.Socket) -> IO ()
     retryConnect (addrInfo, peerSocket) = do
@@ -195,19 +199,21 @@ addPeer connections address = void $ forkIO $ do
       if ByteChar.length message == 0
         then do
           -- Remove socket from Connections when the remote socket closes
-          removePeer connections peerSocket
+          removePeer connections address
           putStrLn $ "Remotely closed connection to peer: " ++ (showAddrInfo addrInfo)
         else do
           listenForRemoteClose connections addrInfo peerSocket
 
--- TODO: Store connected sockets keyed by Address so that the peer is removed by
--- address instead of socket.
--- This would make it suitable for the module's public API.
-removePeer :: Connections -> Net.Socket -> IO ()
-removePeer connections peerSocket = do
-  closeSocket peerSocket
-  Concurrent.modifyMVar connections remove
-  where remove cs = return (filter (/= peerSocket) cs, ())
+removePeer :: Connections -> Address -> IO ()
+removePeer connections address1 = do
+  peerSocket <- Concurrent.modifyMVar connections remove
+  case peerSocket of
+    Just socket ->
+      closeSocket socket
+    Nothing ->
+      return ()
+  where remove cs = return (filter isConnection cs, snd <$> find isConnection cs)
+        isConnection (address2, _) = address1 == address2
 
 showAddrInfo :: Net.AddrInfo -> String
 showAddrInfo = show . Net.addrAddress
