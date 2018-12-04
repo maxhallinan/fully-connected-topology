@@ -1,5 +1,9 @@
 # fully-connected-topology
 
+Launch a toy network with a fully connected topology.
+Input to stdin is broadcast to the network.
+Messages from the network are printed to stdout.
+
 ## Example
 
 ```

@@ -81,16 +81,12 @@ listen handleMessage ownAddress = Net.withSocketsDo $ do
 
 broadcast :: Connections -> String -> IO ()
 broadcast connections message = do
-  sockets <- Concurrent.modifyMVar connections removeClosed
+  sockets <- Concurrent.readMVar connections
   fold <$> traverse (sendMessage message) sockets
   where
     send :: String -> Net.Socket -> IO ()
     send message socket = void $ forkIO $ do
       sendMessage message socket
-
-    -- TODO: remove closed sockets
-    removeClosed :: [Net.Socket] -> IO ([Net.Socket], [Net.Socket])
-    removeClosed sockets = return (sockets, sockets)
 
 sendMessage :: String -> Net.Socket -> IO ()
 sendMessage message peerSocket = do
@@ -108,7 +104,8 @@ sendMessage message peerSocket = do
 
     handleError :: IO.Error.IOError -> IO ()
     handleError error = do
-      -- TODO: detect that the socket is closed and remove sockets
+      -- TODO: What is the best approach to error handling?
+      -- Retry the send? Close the socket? Close, reconnect, and send?
       putStrLn $ "Error sending the message: " ++ (show error)
 
 createSocket :: Net.AddrInfo -> IO Net.Socket
@@ -171,6 +168,7 @@ connect addresses = do
   fold <$> traverse (connect connections) addresses
   return connections
   where
+    connect :: Connections -> Address -> IO ()
     connect connections address = void $ forkIO $ do
       addrInfo <- resolveAddress address
       Exception.catch (connection addrInfo) (retryConnect addrInfo)
@@ -179,8 +177,9 @@ connect addresses = do
         connection addrInfo = connectToPeer handleConnection addrInfo
 
         handleConnection :: Net.Socket -> IO ()
-        handleConnection c =
+        handleConnection c = do
           Concurrent.modifyMVar connections (updateConnections c)
+          void $ forkIO $ cleanup connections c
 
         updateConnections :: Net.Socket -> [Net.Socket] -> IO ([Net.Socket], ())
         updateConnections c cs = return (c : cs, ())
@@ -190,6 +189,20 @@ connect addresses = do
           putStrLn $ "Retrying connection to peer: " ++ (showAddrInfo addrInfo)
           void $ Concurrent.threadDelay 1000000
           void $ connect connections address
+
+        -- Remove socket from Connections when the remote socket closes
+        cleanup :: Connections -> Net.Socket -> IO ()
+        cleanup connections peerSocket = do
+          message <- NetByte.recv peerSocket 1024
+          if ByteChar.length message == 0
+            then do
+              closeSocket peerSocket
+              Concurrent.modifyMVar
+                connections
+                (\cs -> return (filter (/= peerSocket) cs, ()))
+              putStrLn "Closed connection"
+            else do
+              cleanup connections peerSocket
 
 connectToPeer :: (Net.Socket -> IO ()) -> Net.AddrInfo -> IO ()
 connectToPeer handleConnection addrInfo = do
